@@ -1,13 +1,17 @@
+/** @typedef {import('./coordinators/index.js').IMultisigCoordinator} IMultisigCoordinator */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IWalletAccountMultisig} IWalletAccountMultisig */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInteractionResult} MultisigInteractionResult */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
 /**
- * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`. On Solana every
- * call is its own on-chain transaction, so the field is always set: it carries the execution when
- * `status` is `'executed'`, and the call's own submission when it is `'pending'`.
+ * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`, and with the
+ * approvals a coordinator holds. On Solana every call is its own on-chain transaction, so
+ * `transaction` is always set: it carries the execution when `status` is `'executed'`, and the
+ * call's own submission when it is `'pending'`. `confirmations` counts what the chain holds or is
+ * being sent, and `pendingConfirmations` what a coordinator has gathered but not sent, which is 0
+ * for every call that broadcasts.
  *
- * @typedef {MultisigProposal & MultisigInteractionResult} SolanaMultisigProposalResult
+ * @typedef {MultisigProposal & MultisigInteractionResult & { pendingConfirmations: number }} SolanaMultisigProposalResult
  */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
 /**
@@ -73,12 +77,13 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      */
     protected _signerAccount: WalletAccountSolana;
     /**
-     * The signer's address.
+     * The coordinator the approvals are circulated through, undefined when the configuration names
+     * none.
      *
      * @protected
-     * @type {string}
+     * @type {IMultisigCoordinator | undefined}
      */
-    protected _signerAddress: string;
+    protected _coordinator: IMultisigCoordinator | undefined;
     /**
      * The derivation path's index of this account.
      *
@@ -161,16 +166,25 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
      * Approves a pending transaction proposal.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing; the one error it can surface is a stored message whose address lookup tables can no longer be read, which no longer executes by any route. `vaultIndex` does not bear on a vote.
-     * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when `autoExecute` ran the execution, in which case `transaction` is that execution rather than a bare submission.
-     * @throws {ValueError} The signer must not have approved the proposal already.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. `memo` is the note recorded on chain with the vote. `autoExecute` executes the proposal in the same transaction only when it can: this approval reaching the threshold, no time lock, and a signer holding execute on top of the vote. Where it does not apply, it goes inert and the result's `status` stays `'pending'` rather than throwing. `vaultIndex` does not bear on a vote. None of the three applies to a coordinator's bundle, which has decided them already.
+     * @returns {Promise<SolanaMultisigProposalResult>} The approval result. `status` is `'executed'` when the execution ran in the same transaction, in which case `transaction` is that execution rather than a bare submission. Through a coordinator, `fee` is what the bundle's own fee payer is charged. A vote that only circulated adds nothing to `confirmations`, which the chain still governs; it counts in `pendingConfirmations`, with the other approvals the bundle has collected a signature for, and reports `{ hash: '', fee: 0n }`.
+     * @throws {ValueError} The signer must not have approved the proposal already, and a coordinator's bundle must carry this signer's approval and no member's twice.
+     * @throws {MaximumFeeExceededError} A coordinator's bundle must quote within `approveMaxFee`.
      */
     approveProposal(proposalId: number | bigint | string, { memo, autoExecute }?: SolanaMultisigTransactionOptions): Promise<SolanaMultisigProposalResult>;
+    /** @private */
+    private _decodeBundle;
+    /** @private */
+    private _leads;
+    /** @private */
+    private _quoteMessage;
+    /** @private */
+    private _sendSignedTransaction;
     /**
      * Rejects a pending transaction proposal.
      *
      * @param {number | bigint | string} proposalId - The proposal (transaction index) id.
-     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. Only `memo` bears on a rejection, as the note recorded on chain with it: a rejected proposal executes nothing, so `autoExecute` is inert here whatever the votes say.
+     * @param {SolanaMultisigTransactionOptions} [transactionOptions] - The multisig transaction's options. Only `memo` bears on a rejection, as the note recorded on chain with it: a rejected proposal executes nothing, so `autoExecute` is inert here. A rejection is the member's own transaction and never reaches a coordinator.
      * @returns {Promise<SolanaMultisigProposalResult>} The rejection result.
      * @throws {ValueError} The signer must not have rejected the proposal already.
      */
@@ -274,16 +288,22 @@ export default class WalletAccountMultisigSolanaSquads extends WalletAccountRead
     /** @private */
     private _requireViableMembers;
 }
+export type IMultisigCoordinator = import("./coordinators/index.js").IMultisigCoordinator;
 export type IWalletAccountMultisig = import("@tetherto/wdk-wallet/multisig").IWalletAccountMultisig;
 export type IMultisigOwnerManagement = import("@tetherto/wdk-wallet/multisig").IMultisigOwnerManagement;
 export type MultisigInteractionResult = import("@tetherto/wdk-wallet/multisig").MultisigInteractionResult;
 export type MultisigProposal = import("@tetherto/wdk-wallet/multisig").MultisigProposal;
 /**
- * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`. On Solana every
- * call is its own on-chain transaction, so the field is always set: it carries the execution when
- * `status` is `'executed'`, and the call's own submission when it is `'pending'`.
+ * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`, and with the
+ * approvals a coordinator holds. On Solana every call is its own on-chain transaction, so
+ * `transaction` is always set: it carries the execution when `status` is `'executed'`, and the
+ * call's own submission when it is `'pending'`. `confirmations` counts what the chain holds or is
+ * being sent, and `pendingConfirmations` what a coordinator has gathered but not sent, which is 0
+ * for every call that broadcasts.
  */
-export type SolanaMultisigProposalResult = MultisigProposal & MultisigInteractionResult;
+export type SolanaMultisigProposalResult = MultisigProposal & MultisigInteractionResult & {
+    pendingConfirmations: number;
+};
 export type MultisigTransactionOptions = import("@tetherto/wdk-wallet/multisig").MultisigTransactionOptions;
 /**
  * `MultisigTransactionOptions` widened with the vault the proposal spends from and the note the

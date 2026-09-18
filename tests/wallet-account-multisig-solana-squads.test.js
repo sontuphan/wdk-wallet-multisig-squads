@@ -16,13 +16,24 @@
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals'
 
-import { getBase58Decoder, getBase58Encoder, getBase64Decoder } from '@solana/codecs'
+import { getBase58Decoder, getBase58Encoder, getBase64Decoder, getBase64Encoder, getU64Encoder } from '@solana/codecs'
+
+import { pipe } from '@solana/functional'
+import { AccountRole } from '@solana/instructions'
+import {
+  appendTransactionMessageInstructions,
+  compressTransactionMessageUsingAddressLookupTables,
+  createTransactionMessage,
+  setTransactionMessageFeePayer,
+  setTransactionMessageLifetimeUsingBlockhash
+} from '@solana/transaction-messages'
+import { compileTransaction, getBase64EncodedWireTransaction, getTransactionDecoder, isFullySignedTransaction } from '@solana/transactions'
 
 import { AssertionError, MaximumFeeExceededError, NoSuchElementError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
 
 import { AccountNotOwnerError, ThresholdNotMetError } from '@tetherto/wdk-wallet/multisig'
 
-import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
+import { lookupTableAccount, rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 
 import WalletManagerMultisigSolanaSquads, {
   WalletAccountMultisigSolanaSquads,
@@ -46,6 +57,7 @@ const DERIVED_MULTISIG_PDA = '7jmBsJmAV5aAwEQkw3AybYgTMHVUzbWgWMGvyMjhSEDQ'
 // PDAs of TEST_MULTISIG_PDA, from the SDK's `getProposalPda` / `getSpendingLimitPda` rather
 // than from the code under test, so a broken derivation fails instead of cancelling out.
 const TEST_PROPOSAL_PDA_3 = 'E5EgUq6vmcx2ZorjGvtmdatZwNXLcA7V55ZuFUPursRx'
+const TEST_PROPOSAL_PDA_4 = 'DNhyRfBQP5MAJEJ6Cr97DVbJgmoHcVWFpYKxZawXquP9'
 const TEST_VAULT_PDA = '6soQChwEoXXbAo17wNPdfLFaxzrAjiAxPif9nbJkDXCm'
 
 // The member key `getAccount(0)` derives from TEST_SEED_PHRASE.
@@ -73,6 +85,7 @@ const VOTE_ACCOUNTS = [
 
 const CONFIG_TRANSACTION_DISCRIMINATOR = [94, 8, 4, 35, 113, 139, 139, 112]
 const SYSTEM_PROGRAM = '11111111111111111111111111111111'
+const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111'
 
 /**
  * Serves a `Multisig` account holding the given members, so membership checks can run
@@ -404,6 +417,144 @@ async function configuringAccount ({
   return { account, sendTransaction, rpc }
 }
 
+// The eight-byte Anchor discriminators a compiled bundle is read by. Hardcoded here so a unit
+// test needs no SDK; the integration suite builds its bundles with `@sqds/multisig` instead, so a
+// drift between these and the protocol's fails there.
+const APPROVE_DISCRIMINATOR = [144, 37, 164, 136, 188, 216, 42, 248]
+const VAULT_EXECUTE_DISCRIMINATOR = [194, 8, 161, 87, 153, 164, 25, 171]
+
+// What the account charges a bundle it broadcasts, when the cluster cannot price the message: the
+// base fee per signature slot. `BUNDLE_FEE` is what a cluster that can price it answers, and is
+// deliberately not a multiple of the base fee so a computed number cannot pass for a quoted one.
+const SIGNATURE_FEE = 5000n
+const BUNDLE_FEE = 17_320n
+
+// The lookup table a compressing coordinator borrows the multisig and proposal from.
+const ADDRESS_LOOKUP_TABLE_PROGRAM = 'AddressLookupTab1e1111111111111111111111111'
+const TEST_LOOKUP_TABLE = 'BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr'
+
+const BUNDLE_BLOCKHASH = {
+  blockhash: 'GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi',
+  lastValidBlockHeight: 999n
+}
+
+/**
+ * A `proposalApprove` as the account builds it, so a bundle carrying one decodes the way the
+ * account expects: the multisig read-only, the member as a writable signer, the proposal writable.
+ *
+ * @param {string} member - The approving member.
+ * @param {string} [proposalPda] - The proposal it approves (default: the one at index 3).
+ * @returns {Object} The instruction.
+ */
+function approvalOf (member, proposalPda = TEST_PROPOSAL_PDA_3) {
+  return {
+    programAddress: SQUADS_PROGRAM_ADDRESS,
+    accounts: [
+      { address: TEST_MULTISIG_PDA, role: AccountRole.READONLY },
+      { address: member, role: AccountRole.WRITABLE_SIGNER },
+      { address: proposalPda, role: AccountRole.WRITABLE }
+    ],
+    data: new Uint8Array(APPROVE_DISCRIMINATOR)
+  }
+}
+
+/**
+ * A `SetComputeUnitPrice`, which a bundle may carry and which is what buys a priority fee.
+ *
+ * @param {bigint} microLamports - The price per compute unit.
+ * @returns {Object} The instruction.
+ */
+function computeUnitPrice (microLamports) {
+  return {
+    programAddress: COMPUTE_BUDGET_PROGRAM,
+    accounts: [],
+    data: new Uint8Array([3, ...getU64Encoder().encode(microLamports)])
+  }
+}
+
+/**
+ * A System `AdvanceNonceAccount`, the one System instruction a bundle may carry: a coordinator
+ * collecting from people needs a durable nonce, because a blockhash expires too soon.
+ *
+ * @returns {Object} The instruction.
+ */
+function advanceNonceAccount () {
+  return {
+    programAddress: SYSTEM_PROGRAM,
+    accounts: [{ address: TEST_SIGNER, role: AccountRole.WRITABLE }],
+    data: new Uint8Array([4, 0, 0, 0])
+  }
+}
+
+/**
+ * A `vaultTransactionExecute`, which is what makes a bundle report `'executed'`.
+ *
+ * @returns {Object} The instruction.
+ */
+function executionOf () {
+  return {
+    programAddress: SQUADS_PROGRAM_ADDRESS,
+    accounts: [
+      { address: TEST_MULTISIG_PDA, role: AccountRole.READONLY },
+      { address: TEST_PROPOSAL_PDA_3, role: AccountRole.WRITABLE },
+      { address: TEST_VAULT_PDA, role: AccountRole.READONLY }
+    ],
+    data: new Uint8Array(VAULT_EXECUTE_DISCRIMINATOR)
+  }
+}
+
+/**
+ * Compiles a bundle the way a coordinator has to: every approval it means to collect is in it
+ * before the first signature, and so are the fee payer and the lifetime.
+ *
+ * @param {Object[]} instructions - What the bundle carries.
+ * @param {string} [feePayer] - The account charged for it (default: the derived member).
+ * @returns {Object} The compiled, unsigned transaction.
+ */
+function bundleOf (instructions, feePayer = TEST_SIGNER) {
+  return compileTransaction(pipe(
+    createTransactionMessage({ version: 0 }),
+    (m) => setTransactionMessageFeePayer(feePayer, m),
+    (m) => setTransactionMessageLifetimeUsingBlockhash(BUNDLE_BLOCKHASH, m),
+    (m) => appendTransactionMessageInstructions(instructions, m)
+  ))
+}
+
+/**
+ * Whether a base58 signature really is the member's over those bytes, which is what a coordinator
+ * has to be able to check before it merges one into the bundle it holds.
+ *
+ * @param {string} address - The member the signature should be by.
+ * @param {string} signature - The signature, base58 encoded.
+ * @param {Uint8Array} messageBytes - The bytes it should cover.
+ * @returns {Promise<boolean>} Whether it verifies.
+ */
+async function verifySignature (address, signature, messageBytes) {
+  const key = await crypto.subtle.importKey(
+    'raw', getBase58Encoder().encode(address), 'Ed25519', true, ['verify']
+  )
+
+  return await crypto.subtle.verify('Ed25519', key, getBase58Encoder().encode(signature), messageBytes)
+}
+
+/**
+ * The same bundle with the given addresses moved into a lookup table, which is what a coordinator
+ * does to fit more approvals under the 1232-byte transaction limit.
+ *
+ * @param {Object[]} instructions - What the bundle carries.
+ * @param {string[]} borrowed - The addresses the table holds, in table order.
+ * @returns {Object} The compiled, unsigned transaction.
+ */
+function compressedBundleOf (instructions, borrowed) {
+  return compileTransaction(pipe(
+    createTransactionMessage({ version: 0 }),
+    (m) => setTransactionMessageFeePayer(TEST_SIGNER, m),
+    (m) => setTransactionMessageLifetimeUsingBlockhash(BUNDLE_BLOCKHASH, m),
+    (m) => appendTransactionMessageInstructions(instructions, m),
+    (m) => compressTransactionMessageUsingAddressLookupTables(m, { [TEST_LOOKUP_TABLE]: borrowed })
+  ))
+}
+
 /**
  * Wraps an account value in the response envelope the RPC returns.
  *
@@ -435,8 +586,6 @@ describe('WalletAccountMultisigSolanaSquads', () => {
     expect(await account.getAddress()).toBe(TEST_MULTISIG_PDA)
   })
 
-  // Pins REVIEW.logic.md L18: the base class's address field holds the multisig, never the
-  // signer's address, so the two cannot be confused.
   it('holds the multisig address in the base class, not the signer', async () => {
     expect(account._address).toBe(TEST_MULTISIG_PDA)
     expect(await account.getAddress()).toBe(TEST_MULTISIG_PDA)
@@ -990,6 +1139,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         proposalId: '1',
         // DUMMY_FEE + rent for a 221 B vault transaction and a 166 B proposal.
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         transaction: { hash: DUMMY_PROPOSE_HASH, fee: 4480280n }
@@ -1041,6 +1191,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         expect(result).toEqual({
           proposalId: '1',
           confirmations: 1,
+          pendingConfirmations: 0,
           threshold: 1,
           status: 'executed',
           transaction: { hash: DUMMY_PROPOSE_HASH, fee: 4480280n }
@@ -1085,6 +1236,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         expect(result).toEqual({
           proposalId: '1',
           confirmations: 0,
+          pendingConfirmations: 0,
           threshold: options.threshold,
           status: 'pending',
           transaction: { hash: DUMMY_PROPOSE_HASH, fee: 4480280n }
@@ -1100,6 +1252,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         expect(result).toEqual({
           proposalId: '1',
           confirmations: 0,
+          pendingConfirmations: 0,
           threshold: 1,
           status: 'pending',
           transaction: { hash: DUMMY_PROPOSE_HASH, fee: 4480280n }
@@ -1151,6 +1304,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(await account.approveProposal(3)).toEqual({
         proposalId: '3',
         confirmations: 2,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
@@ -1174,6 +1328,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.approveProposal(3)).resolves.toEqual({
         proposalId: '3',
         confirmations: 1,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
@@ -1312,6 +1467,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         expect(result).toEqual({
           proposalId: '3',
           confirmations: 2,
+          pendingConfirmations: 0,
           threshold: 2,
           status: 'executed',
           transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
@@ -1415,7 +1571,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         )
 
         await expect(account.approveProposal(3, { autoExecute: true }))
-          .rejects.toThrow(/no longer be executed/)
+          .rejects.toThrow(/does not exist, so the transaction.s accounts cannot be resolved/)
         // The same approval without the flag never reads the table, so it goes through.
         await expect(account.approveProposal(3)).resolves.toMatchObject({ status: 'pending' })
       })
@@ -1474,6 +1630,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(await account.rejectProposal(3)).toEqual({
         proposalId: '3',
         confirmations: 1,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
@@ -1489,6 +1646,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.rejectProposal(3)).resolves.toEqual({
         proposalId: '3',
         confirmations: 1,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
@@ -1501,6 +1659,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.rejectProposal(3)).resolves.toEqual({
         proposalId: '3',
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
@@ -1515,6 +1674,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.rejectProposal(3)).resolves.toEqual({
         proposalId: '3',
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 2,
         status: 'pending',
         transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
@@ -1684,6 +1844,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
           proposalId: '5',
           // DUMMY_FEE + rent for a 122 B config transaction (two actions) and a 166 B proposal.
           confirmations: 0,
+          pendingConfirmations: 0,
           threshold: 1,
           status: 'pending',
           transaction: { hash: DUMMY_CONFIG_HASH, fee: 3791240n }
@@ -1744,6 +1905,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         proposalId: '5',
         // DUMMY_FEE + rent for a 119 B config transaction and a 166 B proposal.
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_CONFIG_HASH, fee: 3770360n }
@@ -1756,6 +1918,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.addOwner(OTHER_MEMBER, { threshold: 2 })).resolves.toEqual({
         proposalId: '5',
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_CONFIG_HASH, fee: 3791240n }
@@ -1799,6 +1962,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.addOwner(OTHER_MEMBER)).resolves.toEqual({
         proposalId: '5',
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_CONFIG_HASH, fee: 3770360n }
@@ -1885,6 +2049,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         proposalId: '5',
         // DUMMY_FEE + rent for a 118 B config transaction and a 358 B proposal.
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_CONFIG_HASH, fee: 5099720n }
@@ -1953,6 +2118,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.removeOwner(TEST_SIGNER)).resolves.toEqual({
         proposalId: '5',
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_CONFIG_HASH, fee: 5099720n }
@@ -2025,6 +2191,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         proposalId: '5',
         // DUMMY_FEE + rent for a 122 B config transaction and a 358 B proposal.
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_CONFIG_HASH, fee: 5127560n }
@@ -2098,6 +2265,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         proposalId: '5',
         // DUMMY_FEE + rent for a 152 B config transaction and a 262 B proposal.
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_CONFIG_HASH, fee: 4668200n }
@@ -2112,6 +2280,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         proposalId: '5',
         // DUMMY_FEE + rent for a 152 B config transaction and a 166 B proposal.
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_CONFIG_HASH, fee: 4000040n }
@@ -2242,6 +2411,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         proposalId: '5',
         // DUMMY_FEE + rent for an 88 B config transaction and a 262 B proposal.
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_CONFIG_HASH, fee: 4222760n }
@@ -2280,6 +2450,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       await expect(account.changeThreshold(2)).resolves.toEqual({
         proposalId: '5',
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_CONFIG_HASH, fee: 4222760n }
@@ -2780,6 +2951,7 @@ describe('WalletAccountMultisigSolanaSquads', () => {
         proposalId: '1',
         // DUMMY_FEE + the harness rent of 2039280 for each of the two accounts.
         confirmations: 0,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'pending',
         transaction: { hash: DUMMY_TRANSFER_HASH, fee: 4083560n }
@@ -2883,10 +3055,616 @@ describe('WalletAccountMultisigSolanaSquads', () => {
       expect(result).toEqual({
         proposalId: '1',
         confirmations: 1,
+        pendingConfirmations: 0,
         threshold: 1,
         status: 'executed',
         transaction: { hash: DUMMY_TRANSFER_HASH, fee: 4083560n }
       })
+    })
+  })
+
+  describe('coordinator', () => {
+    /**
+     * Builds a coordinator that records what it was asked to send, and the account that uses it.
+     *
+     * @returns {Promise<{ account: Object, coordinator: Object, signerAccount: Object }>}
+     */
+    async function accountWithCoordinator (extraConfig = {}) {
+      const confirmed = []
+      let coordinatorConfig = null
+
+      const coordinator = {
+        getProposal: jest.fn(async () => null),
+        confirmProposal: jest.fn(async (proposalId, signature) => {
+          confirmed.push([proposalId, signature])
+        })
+      }
+
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA,
+        coordinator: (config) => {
+          coordinatorConfig = config
+
+          return coordinator
+        },
+        ...extraConfig
+      })
+      const account = await wallet.getAccount(0)
+
+      return {
+        account,
+        coordinator,
+        confirmed,
+        get coordinatorConfig () { return coordinatorConfig }
+      }
+    }
+
+    it('names the member it derived to the coordinator, and nothing else', async () => {
+      const { account, coordinator, coordinatorConfig } = await accountWithCoordinator()
+
+      expect(account._coordinator).toBe(coordinator)
+      expect(coordinatorConfig).toEqual({ signerAddress: TEST_SIGNER })
+    })
+
+    it('has no coordinator when the configuration names none', async () => {
+      const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+        provider: TEST_RPC_URL,
+        multisigPdaOrCreateKey: TEST_MULTISIG_PDA
+      })
+      const account = await wallet.getAccount(0)
+
+      expect(account._coordinator).toBeUndefined()
+      expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
+    })
+
+    it('votes as the member it derived, whatever the coordinator is', async () => {
+      const { account } = await accountWithCoordinator()
+
+      expect(await account.getSignerAddress()).toBe(TEST_SIGNER)
+    })
+
+    it('leaves a proposal to the signer account', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      stubSolanaRpc({
+        getAccountInfo: () => serveValue(
+          multisigAccountValue([{ address: TEST_SIGNER, mask: 7 }], { threshold: 2, transactionIndex: 4n })
+        ),
+        getMinimumBalanceForRentExemption: ([size]) => (128n + BigInt(size)) * 6960n
+      })
+
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_PROPOSE_HASH, fee: DUMMY_FEE }))
+
+      account._signerAccount.sendTransaction = sendTransaction
+
+      const result = await account.propose({ to: OTHER_MEMBER, value: 1n })
+
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+      expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(2)
+      expect(result).toEqual({
+        proposalId: '5',
+        confirmations: 0,
+        pendingConfirmations: 0,
+        threshold: 2,
+        status: 'pending',
+        // DUMMY_FEE + rent for a 221 B vault transaction and a 166 B proposal.
+        transaction: { hash: DUMMY_PROPOSE_HASH, fee: 4480280n }
+      })
+    })
+
+    it('hands its signature back when it does not complete the bundle', async () => {
+      const { account, coordinator, confirmed } = await accountWithCoordinator()
+      const bundle = bundleOf([approvalOf(TEST_SIGNER), approvalOf(OTHER_MEMBER)])
+
+      coordinator.getProposal.mockResolvedValue(bundle)
+
+      const rpc = stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      const result = await account.approveProposal(3)
+      const [[proposalId, signature]] = confirmed
+
+      expect(coordinator.getProposal).toHaveBeenCalledWith('3')
+      expect(proposalId).toBe('3')
+      // The bundle itself never goes back, only this member's signature over its bytes.
+      expect(getBase58Encoder().encode(signature)).toHaveLength(64)
+      expect(await verifySignature(TEST_SIGNER, signature, bundle.messageBytes)).toBe(true)
+      expect(rpcRequests(rpc, 'sendTransaction')).toEqual([])
+      // One of the bundle's two approvals is signed, and the other member's slot is still empty, so
+      // nothing has reached the chain and the vote counts as pending rather than confirmed.
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 0,
+        pendingConfirmations: 1,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: '', fee: 0n }
+      })
+    })
+
+    it('keeps what a bundle has gathered out of the on-chain count', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // Three approvals for a threshold of two, which a coordinator may collect for redundancy. One
+      // is already on chain and this member signs another, and the two are reported apart, so the
+      // threshold cannot read as met while the third member's slot keeps the bundle where it is.
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        approvalOf(TEST_SIGNER),
+        approvalOf(OTHER_MEMBER),
+        approvalOf(THIRD_MEMBER)
+      ]))
+
+      const rpc = stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [
+              { address: TEST_SIGNER, mask: 7 },
+              { address: OTHER_MEMBER, mask: 7 },
+              { address: THIRD_MEMBER, mask: 7 }
+            ],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({ approved: [OTHER_MEMBER] })
+        ])
+      })
+
+      const result = await account.approveProposal(3)
+
+      expect(rpcRequests(rpc, 'sendTransaction')).toEqual([])
+      expect(result.confirmations).toBe(1)
+      expect(result.pendingConfirmations).toBe(1)
+      expect(result.threshold).toBe(2)
+      expect(result.status).toBe('pending')
+    })
+
+    it('sends the bundle its signature completes, as the bytes it already is', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // The threshold is two: what decides the route is the bundle being signed, not the count.
+      const bundle = bundleOf([approvalOf(TEST_SIGNER)])
+
+      coordinator.getProposal.mockResolvedValue(bundle)
+
+      const rpc = stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE),
+        sendTransaction: () => DUMMY_VOTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+      const [[wire, options]] = rpcRequests(rpc, 'sendTransaction')
+      const broadcast = getTransactionDecoder().decode(getBase64Encoder().encode(wire))
+
+      // The signature goes back either way; what makes this the completing vote is the send.
+      expect(coordinator.confirmProposal).toHaveBeenCalledWith('3', expect.any(String))
+      expect(rpcRequests(rpc, 'sendTransaction')).toHaveLength(1)
+      // `preflightCommitment` is the client's default rather than anything the account sets,
+      // which is how `@tetherto/wdk-wallet-solana` sends too.
+      expect(options).toEqual({ encoding: 'base64', preflightCommitment: 'confirmed' })
+      // The bytes are the bundle's own, with this member's slot filled and nothing else touched.
+      // A recompile would change them, so this comparison is what rules it out.
+      expect(broadcast.messageBytes).toEqual(bundle.messageBytes)
+      expect(broadcast.signatures[TEST_SIGNER]).toHaveLength(64)
+      expect(isFullySignedTransaction(broadcast)).toBe(true)
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 1,
+        pendingConfirmations: 0,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: BUNDLE_FEE }
+      })
+    })
+
+    it('reads the approvals and the execution out of the bundle it is handed', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // A durable nonce's advance, this member's own approval, and an execution riding along.
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        advanceNonceAccount(),
+        approvalOf(TEST_SIGNER),
+        executionOf()
+      ]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 1, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE),
+        sendTransaction: () => DUMMY_EXECUTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 1,
+        pendingConfirmations: 0,
+        threshold: 1,
+        status: 'executed',
+        transaction: { hash: DUMMY_EXECUTE_HASH, fee: BUNDLE_FEE }
+      })
+      expect(coordinator.confirmProposal).toHaveBeenCalledWith('3', expect.any(String))
+    })
+
+    it('refuses a bundle carrying a vote on another proposal', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // The member's own approval is in it, so every other check passes. Signing would put its
+      // signature on the second approval too, since a signature covers the whole message.
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        approvalOf(TEST_SIGNER),
+        approvalOf(TEST_SIGNER, TEST_PROPOSAL_PDA_4)
+      ]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new ValueError(
+          `The bundle the coordinator holds for the proposal ${TEST_PROPOSAL_PDA_3} carries a Squads instruction that neither approves nor executes it on the multisig ${TEST_MULTISIG_PDA}, and a member signs every instruction in it.`
+        )
+      )
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+    })
+
+    it('refuses a bundle carrying an instruction for a program it does not allow', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // A plain transfer out of the member's own account, which its signature would authorise.
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        approvalOf(TEST_SIGNER),
+        {
+          programAddress: SYSTEM_PROGRAM,
+          accounts: [
+            { address: TEST_SIGNER, role: AccountRole.WRITABLE_SIGNER },
+            { address: OTHER_MEMBER, role: AccountRole.WRITABLE }
+          ],
+          data: new Uint8Array([2, 0, 0, 0, 0, 202, 154, 59, 0, 0, 0, 0])
+        }
+      ]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new ValueError(
+          `The bundle the coordinator holds for the proposal ${TEST_PROPOSAL_PDA_3} carries an instruction for the program ${SYSTEM_PROGRAM}, and a member signs every instruction in it. Only Squads votes on that proposal ride along, beside a compute budget, a memo and a nonce advance.`
+        )
+      )
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+    })
+
+    it('refuses a bundle quoting above the fee ceiling, before it signs', async () => {
+      const { account, coordinator } = await accountWithCoordinator({ approveMaxFee: BUNDLE_FEE - 1n })
+
+      // A compute budget rider is allowed through the whitelist, and it is what sets the priority
+      // fee the quote reflects, so the ceiling is the only thing standing between the member and it.
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        computeUnitPrice(1_000_000_000n),
+        approvalOf(TEST_SIGNER)
+      ]))
+
+      const rpc = stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE)
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new MaximumFeeExceededError('Exceeded maximum fee cost for the approve operation.')
+      )
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+      expect(rpcRequests(rpc, 'sendTransaction')).toEqual([])
+    })
+
+    it('takes a bundle quoting within the fee ceiling', async () => {
+      const { account, coordinator } = await accountWithCoordinator({ approveMaxFee: BUNDLE_FEE })
+
+      coordinator.getProposal.mockResolvedValue(bundleOf([
+        computeUnitPrice(1n),
+        approvalOf(TEST_SIGNER)
+      ]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE),
+        sendTransaction: () => DUMMY_VOTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+
+      // One quote serves both the ceiling and the reported fee.
+      expect(coordinator.confirmProposal).toHaveBeenCalledWith('3', expect.any(String))
+      expect(result.transaction).toEqual({ hash: DUMMY_VOTE_HASH, fee: BUNDLE_FEE })
+    })
+
+    it('resolves a bundle compressed with an address lookup table', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // The multisig and the proposal are borrowed from the table, so neither is a static account
+      // any more. Only the member has to stay static, because a signer cannot be borrowed.
+      const borrowed = [TEST_PROPOSAL_PDA_3, TEST_MULTISIG_PDA]
+
+      coordinator.getProposal.mockResolvedValue(
+        compressedBundleOf([approvalOf(TEST_SIGNER)], borrowed)
+      )
+
+      stubSolanaRpc({
+        getMultipleAccounts: ([addresses]) => addresses.includes(TEST_LOOKUP_TABLE)
+          ? serveValue([lookupTableAccount(
+            ADDRESS_LOOKUP_TABLE_PROGRAM,
+            borrowed.map((entry) => getBase58Encoder().encode(entry))
+          )])
+          : serveValue([
+            multisigAccountValue(
+              [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+              { threshold: 2, transactionIndex: 7n }
+            ),
+            proposalAccountValue({})
+          ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE),
+        sendTransaction: () => DUMMY_VOTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 1,
+        pendingConfirmations: 0,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: BUNDLE_FEE }
+      })
+    })
+
+    it('refuses a bundle whose lookup table cannot be read', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      coordinator.getProposal.mockResolvedValue(
+        compressedBundleOf([approvalOf(TEST_SIGNER)], [TEST_PROPOSAL_PDA_3, TEST_MULTISIG_PDA])
+      )
+
+      stubSolanaRpc({
+        getMultipleAccounts: ([addresses]) => addresses.includes(TEST_LOOKUP_TABLE)
+          ? serveValue([null])
+          : serveValue([
+            multisigAccountValue(
+              [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+              { threshold: 2, transactionIndex: 7n }
+            ),
+            proposalAccountValue({})
+          ])
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new NoSuchElementError(
+          `The address lookup table ${TEST_LOOKUP_TABLE} does not exist, so the transaction's accounts cannot be resolved.`
+        )
+      )
+    })
+
+    it('counts the approvals the cluster holds alongside the bundle', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // Another member voted alone before the coordinator was involved, which is what a null
+      // `getProposal` tells a member to do, so its approval is on chain and not in the bundle.
+      coordinator.getProposal.mockResolvedValue(bundleOf([approvalOf(TEST_SIGNER)]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue([
+            { address: TEST_SIGNER, mask: 7 },
+            { address: OTHER_MEMBER, mask: 7 },
+            { address: THIRD_MEMBER, mask: 7 }
+          ], { threshold: 2, transactionIndex: 7n }),
+          proposalAccountValue({ approved: [OTHER_MEMBER] })
+        ]),
+        getFeeForMessage: () => serveValue(BUNDLE_FEE),
+        sendTransaction: () => DUMMY_VOTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+
+      // One on chain plus one in the bundle is the two the threshold wants, so the number the
+      // caller compares against `threshold` has to say so.
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 2,
+        pendingConfirmations: 0,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: BUNDLE_FEE }
+      })
+      expect(result.confirmations >= result.threshold).toBe(true)
+    })
+
+    it('falls back to the base fee when the cluster cannot price the bundle', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      coordinator.getProposal.mockResolvedValue(bundleOf([approvalOf(TEST_SIGNER)]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ]),
+        // What a node answers for a message it cannot find a blockhash for, which is the durable
+        // nonce case the whole bundle design leans on.
+        getFeeForMessage: () => serveValue(null),
+        sendTransaction: () => DUMMY_VOTE_HASH
+      })
+
+      const result = await account.approveProposal(3)
+
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 1,
+        pendingConfirmations: 0,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: SIGNATURE_FEE }
+      })
+    })
+
+    it('refuses a bundle that carries one member twice', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // Squads rejects the second, and a Solana transaction is atomic, so the batch reverts. It
+      // needs only the one signature, so nothing else would stop the account broadcasting it.
+      coordinator.getProposal.mockResolvedValue(
+        bundleOf([approvalOf(TEST_SIGNER), approvalOf(TEST_SIGNER)])
+      )
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new ValueError(
+          `The bundle the coordinator holds for the proposal 3 carries more than one approval by the member ${TEST_SIGNER}, which Squads rejects, so it can never land.`
+        )
+      )
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+    })
+
+    it('refuses a bundle that does not carry its own approval', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      // The member is a signer of these bytes, as their fee payer, but it is not approving in
+      // them. Signing would put its signature on a transaction it is not voting in.
+      coordinator.getProposal.mockResolvedValue(bundleOf([approvalOf(OTHER_MEMBER)]))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      await expect(account.approveProposal(3)).rejects.toThrow(
+        new ValueError(
+          `The bundle the coordinator holds for the proposal 3 does not carry an approval by the signer ${TEST_SIGNER}.`
+        )
+      )
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+    })
+
+    it('leaves a rejection to the signer account', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }))
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue(
+            [{ address: TEST_SIGNER, mask: 7 }, { address: OTHER_MEMBER, mask: 7 }],
+            { threshold: 2, transactionIndex: 7n }
+          ),
+          proposalAccountValue({})
+        ])
+      })
+
+      account._signerAccount.sendTransaction = sendTransaction
+
+      const result = await account.rejectProposal(3)
+
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+      expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(1)
+      expect(result).toEqual({
+        proposalId: '3',
+        confirmations: 0,
+        pendingConfirmations: 0,
+        threshold: 2,
+        status: 'pending',
+        transaction: { hash: DUMMY_VOTE_HASH, fee: DUMMY_FEE }
+      })
+    })
+
+    it('leaves the execution to the signer account', async () => {
+      const { account, coordinator } = await accountWithCoordinator()
+
+      stubSolanaRpc({
+        getMultipleAccounts: () => serveValue([
+          multisigAccountValue([{ address: TEST_SIGNER, mask: 7 }], { threshold: 1, transactionIndex: 7n }),
+          proposalAccountValue({ status: 3, approved: [TEST_SIGNER] }),
+          vaultTransactionAccountValue({}),
+          clockAccountValue(0n)
+        ])
+      })
+
+      const sendTransaction = jest.fn(async () => ({ hash: DUMMY_EXECUTE_HASH, fee: DUMMY_FEE }))
+
+      account._signerAccount.sendTransaction = sendTransaction
+
+      const result = await account.executeProposal(3)
+
+      expect(coordinator.confirmProposal).not.toHaveBeenCalled()
+      expect(sendTransaction.mock.calls[0][0].instructions).toHaveLength(1)
+      expect(result).toEqual({ hash: DUMMY_EXECUTE_HASH, fee: DUMMY_FEE })
+    })
+
+    it('erases the key it derived, whatever the coordinator is', async () => {
+      const { account } = await accountWithCoordinator()
+
+      account.dispose()
+
+      await expect(account.sign('hello')).rejects.toThrow('The wallet account has been disposed.')
     })
   })
 

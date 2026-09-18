@@ -16,6 +16,7 @@ export type SolanaMultisigProposal = import("./src/wallet-account-read-only-mult
 export type SolanaMultisigProposalResult = import("./src/wallet-account-multisig-solana-squads.js").SolanaMultisigProposalResult;
 export type SolanaMultisigTransactionOptions = import("./src/wallet-account-multisig-solana-squads.js").SolanaMultisigTransactionOptions;
 export type SolanaMultisigAddOwnerOptions = import("./src/wallet-account-multisig-solana-squads.js").SolanaMultisigAddOwnerOptions;
+export type MultisigCoordinatorFactory = import("./src/coordinators/index.js").MultisigCoordinatorFactory;
 export type SquadsMember = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsMember;
 export type SquadsMultisigAccount = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsMultisigAccount;
 export type SquadsProposalAccount = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProposalAccount;
@@ -27,6 +28,7 @@ export type SquadsConfigAction = import("./src/wallet-account-read-only-multisig
 export type SquadsTransactionAccount = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsTransactionAccount;
 export type SquadsProgramConfig = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProgramConfig;
 export type SquadsProposalContext = import("./src/wallet-account-read-only-multisig-solana-squads.js").SquadsProposalContext;
-export { default as WalletAccountReadOnlyMultisigSolanaSquads, SQUADS_PROGRAM_ADDRESS, TRANSACTION_KIND } from "./src/wallet-account-read-only-multisig-solana-squads.js";
+export { default as WalletAccountReadOnlyMultisigSolanaSquads, PROPOSAL_DATA_MASK, SQUADS_PROGRAM_ADDRESS, TRANSACTION_KIND } from "./src/wallet-account-read-only-multisig-solana-squads.js";
+export { IMultisigCoordinator } from "./src/coordinators/index.js";
 export { AccountNotOwnerError, ThresholdNotMetError } from "@tetherto/wdk-wallet/multisig";
 export { AssertionError, InvalidTokenError, MaximumFeeExceededError, NoSuchElementError, NotImplementedError, ProviderError, ProviderErrorReason, ProviderRequiredError, UnsupportedOperationError, ValueError, WdkError } from "@tetherto/wdk-wallet";

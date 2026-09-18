@@ -39,6 +39,7 @@
 /** @typedef {import('@tetherto/wdk-wallet').TransactionReceipt} TransactionReceipt */
 /** @typedef {import('@tetherto/wdk-wallet').Finality} Finality */
 /** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
+/** @typedef {import('./coordinators/index.js').MultisigCoordinatorFactory} MultisigCoordinatorFactory */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransactionReceipt} SolanaTransactionReceipt */
 /**
@@ -61,9 +62,11 @@
  * charges, and the fee ceilings above which it refuses to submit.
  *
  * @typedef {Object} SolanaMultisigSquadsSigningConfig
- * @property {string} [rentPayer] - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which in practice makes it the fee payer of a sponsoring wallet.
+ * @property {MultisigCoordinatorFactory} [coordinator] - Builds the coordinator the account votes through, from the address of the member it will vote as. Omit it and each vote is the member's own transaction.
+ * @property {string} [rentPayer] - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which nothing in this package currently provides.
  * @property {number | bigint} [createMaxFee] - The maximum fee amount for the create/deploy operation.
  * @property {number | bigint} [transferMaxFee] - The maximum fee amount for transfers.
+ * @property {number | bigint} [approveMaxFee] - The maximum fee amount for approving through a coordinator, quoted before the member signs. A coordinator compiles the bundle, so it fixes the priority fee that vote carries.
  */
 /** @typedef {SolanaMultisigSquadsReadOnlyConfig & SolanaMultisigSquadsSigningConfig} SolanaMultisigSquadsConfig */
 /**
@@ -176,6 +179,14 @@ export namespace SECRET_SIZE {
     let privateKey: number;
     let keyPair: number;
 }
+/** @type {{ multisig: 8, proposal: 4, transaction: 2, now: 1, all: 15 }} */
+export const PROPOSAL_DATA_MASK: {
+    multisig: 8;
+    proposal: 4;
+    transaction: 2;
+    now: 1;
+    all: 15;
+};
 /**
  * Read-only Solana Squads multisig wallet account implementation.
  *
@@ -421,24 +432,26 @@ export default class WalletAccountReadOnlyMultisigSolanaSquads extends WalletAcc
      */
     protected _getMultisigAccount(): Promise<SquadsMultisigAccount>;
     /**
-     * Reads the multisig and one of its proposals in a single request.
+     * Reads a proposal's whole context in one request.
      *
-     * @protected
+     * @overload
      * @param {bigint} index - The proposal (transaction index) id.
-     * @returns {Promise<Pick<SquadsProposalContext, 'multisig' | 'proposal'>>} The decoded multisig and proposal accounts.
-     * @throws {ProviderRequiredError} The wallet must be connected to a provider.
-     */
-    protected _getMultisigAndProposal(index: bigint): Promise<Pick<SquadsProposalContext, "multisig" | "proposal">>;
-    /**
-     * Reads the multisig, a proposal, its backing transaction and the clock in a single request.
-     *
-     * @protected
-     * @param {bigint} index - The proposal (transaction index) id.
-     * @returns {Promise<SquadsProposalContext>} The decoded accounts and the cluster's current Unix timestamp.
+     * @returns {Promise<SquadsProposalContext>} The multisig, the proposal, its transaction and the cluster clock.
      * @throws {ProviderRequiredError} The wallet must be connected to a provider.
      * @throws {ProviderError} The provider must serve the cluster clock.
      */
-    protected _getMultisigProposalAndTransaction(index: bigint): Promise<SquadsProposalContext>;
+    protected _getProposal(index: bigint): Promise<SquadsProposalContext>;
+    /**
+     * Reads a proposal's context in one request, the parts `mask` names.
+     *
+     * @overload
+     * @param {bigint} index - The proposal (transaction index) id. Read only for the parts that need it.
+     * @param {number} mask - The parts to read, as the bits `[multisig, proposal, transaction, now]`.
+     * @returns {Promise<Partial<SquadsProposalContext>>} The parts asked for, and nothing else.
+     * @throws {ProviderRequiredError} The wallet must be connected to a provider.
+     * @throws {ProviderError} The provider must serve the cluster clock, when `now` is asked for.
+     */
+    protected _getProposal(index: bigint, mask: number): Promise<Partial<SquadsProposalContext>>;
     /**
      * Reads the Squads program config account.
      *
@@ -676,6 +689,7 @@ export type TransactionResult = import("@tetherto/wdk-wallet").TransactionResult
 export type TransactionReceipt = import("@tetherto/wdk-wallet").TransactionReceipt;
 export type Finality = import("@tetherto/wdk-wallet").Finality;
 export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
+export type MultisigCoordinatorFactory = import("./coordinators/index.js").MultisigCoordinatorFactory;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type SolanaTransactionReceipt = import("@tetherto/wdk-wallet-solana").SolanaTransactionReceipt;
 /**
@@ -717,7 +731,11 @@ export type SolanaMultisigSquadsReadOnlyConfig = {
  */
 export type SolanaMultisigSquadsSigningConfig = {
     /**
-     * - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which in practice makes it the fee payer of a sponsoring wallet.
+     * - Builds the coordinator the account votes through, from the address of the member it will vote as. Omit it and each vote is the member's own transaction.
+     */
+    coordinator?: MultisigCoordinatorFactory;
+    /**
+     * - The account charged for the rent the multisig, transaction and proposal accounts lock up (default: the signer). It must sign the transaction by other means, which nothing in this package currently provides.
      */
     rentPayer?: string;
     /**
@@ -728,6 +746,10 @@ export type SolanaMultisigSquadsSigningConfig = {
      * - The maximum fee amount for transfers.
      */
     transferMaxFee?: number | bigint;
+    /**
+     * - The maximum fee amount for approving through a coordinator, quoted before the member signs. A coordinator compiles the bundle, so it fixes the priority fee that vote carries.
+     */
+    approveMaxFee?: number | bigint;
 };
 export type SolanaMultisigSquadsConfig = SolanaMultisigSquadsReadOnlyConfig & SolanaMultisigSquadsSigningConfig;
 /**
