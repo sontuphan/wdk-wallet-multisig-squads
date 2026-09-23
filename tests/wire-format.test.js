@@ -37,7 +37,7 @@ import {
 
 import WalletManagerMultisigSolanaSquads, {
   SQUADS_PROGRAM_ADDRESS
-} from '@tetherto/wdk-protocol-multisig-squads'
+} from '@tetherto/wdk-wallet-multisig-squads'
 
 import { CONFIG_ACTION, CONFIG_ACTION_ENCODER, INSTRUCTION } from '../src/helpers/layouts.js'
 

@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto'
 
 import { createSolanaRpc } from '@solana/rpc'
 
-import WalletManagerMultisigSolanaSquads from '@tetherto/wdk-protocol-multisig-squads'
+import WalletManagerMultisigSolanaSquads from '@tetherto/wdk-wallet-multisig-squads'
 
 import { LAMPORTS_PER_SOL, airdrop, confirmTransaction } from './chain.js'
 

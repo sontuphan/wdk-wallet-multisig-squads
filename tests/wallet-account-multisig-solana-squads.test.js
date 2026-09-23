@@ -27,7 +27,7 @@ import {
   setTransactionMessageFeePayer,
   setTransactionMessageLifetimeUsingBlockhash
 } from '@solana/transaction-messages'
-import { compileTransaction, getBase64EncodedWireTransaction, getTransactionDecoder, isFullySignedTransaction } from '@solana/transactions'
+import { compileTransaction, getTransactionDecoder, isFullySignedTransaction } from '@solana/transactions'
 
 import { AssertionError, MaximumFeeExceededError, NoSuchElementError, UnsupportedOperationError, ValueError } from '@tetherto/wdk-wallet'
 
@@ -40,7 +40,7 @@ import WalletManagerMultisigSolanaSquads, {
   WalletAccountReadOnlyMultisigSolanaSquads,
   PERMISSION,
   SQUADS_PROGRAM_ADDRESS
-} from '@tetherto/wdk-protocol-multisig-squads'
+} from '@tetherto/wdk-wallet-multisig-squads'
 
 const TEST_SEED_PHRASE =
   'test walk nut penalty hip pave soap entry language right filter choice'

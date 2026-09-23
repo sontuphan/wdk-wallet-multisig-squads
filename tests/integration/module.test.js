@@ -26,9 +26,8 @@ import { WalletAccountReadOnlySolana } from '@tetherto/wdk-wallet-solana'
 
 import WalletManagerMultisigSolanaSquads, {
   SQUADS_PROGRAM_ADDRESS,
-  WalletAccountMultisigSolanaSquads,
   WalletAccountReadOnlyMultisigSolanaSquads
-} from '@tetherto/wdk-protocol-multisig-squads'
+} from '@tetherto/wdk-wallet-multisig-squads'
 
 import {
   LAMPORTS_PER_SOL,
@@ -80,7 +79,7 @@ function solanaAccount (target) {
   })
 }
 
-describe('@tetherto/wdk-protocol-multisig-squads', () => {
+describe('@tetherto/wdk-wallet-multisig-squads', () => {
   const rpc = createSolanaRpc(TEST_RPC_URL)
 
   let stopSolanaTestValidator

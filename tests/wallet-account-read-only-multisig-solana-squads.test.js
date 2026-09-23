@@ -25,7 +25,7 @@ import { rpcRequests, stubSolanaRpc } from './helpers/rpc.js'
 import {
   WalletAccountReadOnlyMultisigSolanaSquads,
   SQUADS_PROGRAM_ADDRESS
-} from '@tetherto/wdk-protocol-multisig-squads'
+} from '@tetherto/wdk-wallet-multisig-squads'
 
 const TEST_RPC_URL = 'https://dummy-url.com'
 const TEST_MULTISIG_PDA = 'EEPqJbpYrwqisgoPt3Vu74YBqRji8mFrRxQdARVfDuNG'

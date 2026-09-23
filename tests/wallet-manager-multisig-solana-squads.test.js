@@ -20,7 +20,7 @@ import { ProviderRequiredError, ValueError } from '@tetherto/wdk-wallet'
 
 import WalletManagerMultisigSolanaSquads, {
   WalletAccountMultisigSolanaSquads
-} from '@tetherto/wdk-protocol-multisig-squads'
+} from '@tetherto/wdk-wallet-multisig-squads'
 
 import { stubSolanaRpc } from './helpers/rpc.js'
 

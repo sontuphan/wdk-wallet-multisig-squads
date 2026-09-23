@@ -1,8 +1,8 @@
-# @tetherto/wdk-protocol-multisig-squads
+# @tetherto/wdk-wallet-multisig-squads
 
-[![npm version](https://img.shields.io/npm/v/%40tetherto%2Fwdk-protocol-multisig-squads?style=flat-square)](https://www.npmjs.com/package/@tetherto/wdk-protocol-multisig-squads)
-[![npm downloads](https://img.shields.io/npm/dw/%40tetherto%2Fwdk-protocol-multisig-squads?style=flat-square)](https://www.npmjs.com/package/@tetherto/wdk-protocol-multisig-squads)
-[![license](https://img.shields.io/npm/l/%40tetherto%2Fwdk-protocol-multisig-squads?style=flat-square)](https://github.com/tetherto/wdk-protocol-multisig-squads/blob/main/LICENSE)
+[![npm version](https://img.shields.io/npm/v/%40tetherto%2Fwdk-wallet-multisig-squads?style=flat-square)](https://www.npmjs.com/package/@tetherto/wdk-wallet-multisig-squads)
+[![npm downloads](https://img.shields.io/npm/dw/%40tetherto%2Fwdk-wallet-multisig-squads?style=flat-square)](https://www.npmjs.com/package/@tetherto/wdk-wallet-multisig-squads)
+[![license](https://img.shields.io/npm/l/%40tetherto%2Fwdk-wallet-multisig-squads?style=flat-square)](https://github.com/tetherto/wdk-wallet-multisig-squads/blob/main/LICENSE)
 [![docs](https://img.shields.io/badge/docs-docs.wdk.tether.io-0A66C2?style=flat-square)](https://docs.wdk.tether.io/)
 
 **Note**: This package is currently in beta. Please test thoroughly in development environments before using in production.
@@ -18,13 +18,13 @@ For detailed documentation about the complete WDK ecosystem, visit [docs.wdk.tet
 ## Installation
 
 ```bash
-npm install @tetherto/wdk-protocol-multisig-squads
+npm install @tetherto/wdk-wallet-multisig-squads
 ```
 
 ## Quick Start
 
 ```javascript
-import WalletManagerMultisigSolanaSquads from '@tetherto/wdk-protocol-multisig-squads'
+import WalletManagerMultisigSolanaSquads from '@tetherto/wdk-wallet-multisig-squads'
 
 const seedPhrase = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 
@@ -137,7 +137,7 @@ rather than `confirmations`, which the chain governs. One network fee covers bot
 whoever the coordinator named as fee payer when it compiled.
 
 ```javascript
-import { IMultisigCoordinator } from '@tetherto/wdk-protocol-multisig-squads'
+import { IMultisigCoordinator } from '@tetherto/wdk-wallet-multisig-squads'
 
 // Implement `getProposal` and `confirmProposal`. The interface documents what each is handed and
 // what it must return.
@@ -268,7 +268,7 @@ Join the [WDK Discord](https://discord.gg/arYXDhHB2w) to connect with other deve
 
 ## Support
 
-For support, please [open an issue](https://github.com/tetherto/wdk-protocol-multisig-squads/issues) on GitHub or reach out via [email](mailto:wallet-info@tether.io).
+For support, please [open an issue](https://github.com/tetherto/wdk-wallet-multisig-squads/issues) on GitHub or reach out via [email](mailto:wallet-info@tether.io).
 
 ## Contributing
 
