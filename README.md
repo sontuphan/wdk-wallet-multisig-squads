@@ -24,11 +24,11 @@ npm install @tetherto/wdk-wallet-multisig-squads
 ## Quick Start
 
 ```javascript
-import WalletManagerMultisigSolanaSquads from '@tetherto/wdk-wallet-multisig-squads'
+import WalletManagerMultisigSquads from '@tetherto/wdk-wallet-multisig-squads'
 
 const seedPhrase = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'
 
-const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
+const wallet = new WalletManagerMultisigSquads(seedPhrase, {
   provider: 'https://api.devnet.solana.com',
   commitment: 'confirmed',
   // The multisig's address derives from this key, so keep it: without it the address —
@@ -147,7 +147,7 @@ class MyCoordinator {
   /* ... */
 }
 
-const wallet = new WalletManagerMultisigSolanaSquads(seedPhrase, {
+const wallet = new WalletManagerMultisigSquads(seedPhrase, {
   provider: 'https://api.devnet.solana.com',
   multisigPdaOrCreateKey: '<existing multisig address>',
   coordinator: (config) => new MyCoordinator(config)

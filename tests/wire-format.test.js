@@ -35,7 +35,7 @@ import {
   TOKEN_PROGRAM_ADDRESS
 } from '@solana-program/token'
 
-import WalletManagerMultisigSolanaSquads, {
+import WalletManagerMultisigSquads, {
   SQUADS_PROGRAM_ADDRESS
 } from '@tetherto/wdk-wallet-multisig-squads'
 
@@ -246,7 +246,7 @@ describe('wire format', () => {
   let account
 
   beforeEach(async () => {
-    const wallet = new WalletManagerMultisigSolanaSquads(TEST_SEED_PHRASE, {
+    const wallet = new WalletManagerMultisigSquads(TEST_SEED_PHRASE, {
       provider: 'https://dummy-url.com',
       createKeySecret: getBase58Decoder().decode(new Uint8Array(32).fill(9))
     })

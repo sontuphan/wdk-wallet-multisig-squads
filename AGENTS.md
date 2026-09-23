@@ -4,7 +4,7 @@ This repository is part of the Tether WDK (Wallet Development Kit) ecosystem. It
 
 ## Project Overview
 
-- **Architecture:** Modular architecture with clear separation between Core, Wallet managers, and Protocols. This package is a **Protocol** that lets Solana wallet accounts interact with the Squads multisig program.
+- **Architecture:** Modular architecture with clear separation between Core, Wallet managers, and Protocols. This package is a **wallet** module that lets Solana accounts interact with the Squads multisig program.
 - **Runtime:** Supports both Node.js and Bare runtime.
 
 ## Tech Stack & Tooling
@@ -21,8 +21,8 @@ This repository is part of the Tether WDK (Wallet Development Kit) ecosystem. It
 
 ## Coding Conventions
 
-- **File Naming:** Kebab-case (e.g., `wallet-manager-multisig-solana-squads.js`).
-- **Class Naming:** PascalCase (e.g., `WalletManagerMultisigSolanaSquads`).
+- **File Naming:** Kebab-case (e.g., `wallet-manager-multisig-squads.js`).
+- **Class Naming:** PascalCase (e.g., `WalletManagerMultisigSquads`).
 - **Private Members:** Prefixed with `_` (underscore) and explicitly documented with `@private` / `@protected`.
 - **Imports:** Explicit file extensions are mandatory (e.g., `import ... from './file.js'`).
 - **Copyright:** All source files must include the standard Tether copyright header.
