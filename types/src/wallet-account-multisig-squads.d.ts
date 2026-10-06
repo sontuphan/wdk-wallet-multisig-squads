@@ -36,7 +36,12 @@
 /** @typedef {import('@tetherto/wdk-wallet').KeyPair} KeyPair */
 /** @typedef {import('@solana/signers').KeyPairSigner} KeyPairSigner */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
+/** @typedef {import('@tetherto/wdk-wallet-solana/signers').ISignerSolana} ISignerSolana */
 /** @typedef {import('./wallet-account-read-only-multisig-squads.js').MultisigSquadsWalletConfig} MultisigSquadsWalletConfig */
+/**
+ * @typedef {Object} SignerOptions
+ * @property {boolean} [shouldWipeSignerOnDisposal] - If true, wipes the signer given at construction on calls to the 'dispose' method.
+ */
 /**
  * The Squads member permissions, as the bits of a member's mask.
  *
@@ -62,8 +67,17 @@ export default class WalletAccountMultisigSquads extends WalletAccountReadOnlyMu
      */
     static getCreateKeySigner(createKeySecret: string | Uint8Array): Promise<KeyPairSigner>;
     /**
-     * Creates a new Solana Squads multisig wallet account.
+     * Creates a new Solana Squads multisig wallet account from a signer.
      *
+     * @overload
+     * @param {ISignerSolana} signer - The member's signer, derived to an account path.
+     * @param {MultisigSquadsWalletConfig & SignerOptions} config - The configuration object.
+     */
+    constructor(signer: ISignerSolana, config: MultisigSquadsWalletConfig & SignerOptions);
+    /**
+     * Creates a new Solana Squads multisig wallet account from a seed.
+     *
+     * @overload
      * @param {string | Uint8Array} seed - A [BIP-39](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki) mnemonic seed phrase, or a raw BIP-32 master seed (16-64 bytes).
      * @param {string} path - The SLIP-0010 derivation path (e.g. "0'/0'").
      * @param {MultisigSquadsWalletConfig} config - The configuration object.
@@ -76,32 +90,40 @@ export default class WalletAccountMultisigSquads extends WalletAccountReadOnlyMu
      * @type {WalletAccountSolana}
      */
     protected _signerAccount: WalletAccountSolana;
+    /** @private */
+    private _signer;
     /**
      * The coordinator the approvals are circulated through, undefined when the configuration names
-     * none.
+     * none or before the account first needs it.
      *
      * @protected
      * @type {IMultisigCoordinator | undefined}
      */
     protected _coordinator: IMultisigCoordinator | undefined;
     /**
-     * The derivation path's index of this account.
+     * True if the wallet account has been disposed.
      *
-     * @type {number}
+     * @type {boolean}
      */
-    get index(): number;
+    get disposed(): boolean;
     /**
-     * The derivation path of this account (see [SLIP-0010](https://slips.readthedocs.io/en/latest/slip-0010/)).
+     * The derivation path's index of this account, or null for a signer bound to no derivation path.
      *
-     * @type {string}
+     * @type {number | null}
      */
-    get path(): string;
+    get index(): number | null;
     /**
-     * The key pair of the signer account.
+     * The derivation path of this account (see [SLIP-0010](https://slips.readthedocs.io/en/latest/slip-0010/)), or null for a signer bound to no derivation path.
      *
-     * @type {KeyPair}
+     * @type {string | null}
      */
-    get keyPair(): KeyPair;
+    get path(): string | null;
+    /**
+     * The key pair of the signer account, or null for a signer that exposes no key material.
+     *
+     * @type {KeyPair | null}
+     */
+    get keyPair(): KeyPair | null;
     /**
      * Returns the address of the member this account votes and proposes as.
      *
@@ -244,13 +266,17 @@ export default class WalletAccountMultisigSquads extends WalletAccountReadOnlyMu
      */
     toReadOnlyAccount(): Promise<WalletAccountReadOnlyMultisigSquads>;
     /**
-     * Disposes the wallet account, erasing the private key from the memory.
+     * Disposes the wallet account. The signer is wiped only if the account owns it (see {@link SignerOptions}).
      *
      * @returns {void} Nothing; the account cannot sign once disposed.
      */
     dispose(): void;
     /** @private */
     private _proposeVaultTransaction;
+    /** @private */
+    private _getCoordinator;
+    /** @private */
+    private _signTransaction;
     /** @private */
     private _getRentPayerAccount;
     /** @private */
@@ -330,6 +356,13 @@ export type TransferOptions = import("@tetherto/wdk-wallet").TransferOptions;
 export type KeyPair = import("@tetherto/wdk-wallet").KeyPair;
 export type KeyPairSigner = import("@solana/signers").KeyPairSigner;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
+export type ISignerSolana = import("@tetherto/wdk-wallet-solana/signers").ISignerSolana;
 export type MultisigSquadsWalletConfig = import("./wallet-account-read-only-multisig-squads.js").MultisigSquadsWalletConfig;
+export type SignerOptions = {
+    /**
+     * - If true, wipes the signer given at construction on calls to the 'dispose' method.
+     */
+    shouldWipeSignerOnDisposal?: boolean;
+};
 import WalletAccountReadOnlyMultisigSquads from './wallet-account-read-only-multisig-squads.js';
 import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana';

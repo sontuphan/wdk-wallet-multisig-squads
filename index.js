@@ -72,4 +72,4 @@ export { IMultisigCoordinator } from './src/coordinators/index.js'
 
 export { AccountNotOwnerError, ThresholdNotMetError } from '@tetherto/wdk-wallet/multisig'
 
-export { AssertionError, InvalidTokenError, MaximumFeeExceededError, NoSuchElementError, NotImplementedError, ProviderError, ProviderErrorReason, ProviderRequiredError, UnsupportedOperationError, ValueError, WdkError } from '@tetherto/wdk-wallet'
+export { AssertionError, DisposalError, InvalidSignerError, InvalidTokenError, MaximumFeeExceededError, NoSuchElementError, NotImplementedError, ProviderError, ProviderErrorReason, ProviderRequiredError, UnsupportedOperationError, ValueError, WdkError } from '@tetherto/wdk-wallet'

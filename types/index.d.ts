@@ -31,4 +31,4 @@ export type SquadsProposalContext = import("./src/wallet-account-read-only-multi
 export { default as WalletAccountReadOnlyMultisigSquads, PROPOSAL_DATA_MASK, SQUADS_PROGRAM_ADDRESS, TRANSACTION_KIND } from "./src/wallet-account-read-only-multisig-squads.js";
 export { IMultisigCoordinator } from "./src/coordinators/index.js";
 export { AccountNotOwnerError, ThresholdNotMetError } from "@tetherto/wdk-wallet/multisig";
-export { AssertionError, InvalidTokenError, MaximumFeeExceededError, NoSuchElementError, NotImplementedError, ProviderError, ProviderErrorReason, ProviderRequiredError, UnsupportedOperationError, ValueError, WdkError } from "@tetherto/wdk-wallet";
+export { AssertionError, DisposalError, InvalidSignerError, InvalidTokenError, MaximumFeeExceededError, NoSuchElementError, NotImplementedError, ProviderError, ProviderErrorReason, ProviderRequiredError, UnsupportedOperationError, ValueError, WdkError } from "@tetherto/wdk-wallet";
