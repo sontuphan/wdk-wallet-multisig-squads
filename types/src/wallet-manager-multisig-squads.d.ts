@@ -3,7 +3,7 @@
  *
  * @extends {WalletManager<ISignerSolana>}
  */
-export default class WalletManagerMultisigSquads extends WalletManager<ISignerSolana> {
+export default class WalletManagerMultisigSquads extends WalletManager<import("@tetherto/wdk-wallet-solana/signers").ISignerSolana> {
     /**
      * Creates a new wallet manager for Solana Squads multisig wallets from a seed. The manager wraps
      * the seed in a signer at "m/44'/501'", owns it, and wipes it on {@link dispose}.
@@ -71,17 +71,6 @@ export default class WalletManagerMultisigSquads extends WalletManager<ISignerSo
     getAccountByPath(path: string, options?: {
         signerName?: string;
     }): Promise<WalletAccountMultisigSquads>;
-    /**
-     * Returns the current fee rates.
-     *
-     * @returns {Promise<FeeRates>} The fee rates (in lamports).
-     * @throws {ProviderRequiredError} A provider must be configured.
-     */
-    getFeeRates(): Promise<FeeRates>;
-    /**
-     * Disposes all wallet accounts, and the default signer if the manager built it from a seed.
-     */
-    dispose(): void;
 }
 export type SolanaRpc = ReturnType<typeof import("@solana/rpc").createSolanaRpc>;
 export type FeeRates = import("@tetherto/wdk-wallet").FeeRates;

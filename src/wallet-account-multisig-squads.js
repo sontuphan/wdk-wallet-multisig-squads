@@ -68,6 +68,22 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 /** @typedef {import('@tetherto/wdk-wallet/multisig').IMultisigOwnerManagement} IMultisigOwnerManagement */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigInteractionResult} MultisigInteractionResult */
 /** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigProposal} MultisigProposal */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
+/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigOptions} MultisigOptions */
+
+/** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
+/** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
+/** @typedef {import('@tetherto/wdk-wallet').KeyPair} KeyPair */
+
+/** @typedef {import('@solana/signers').KeyPairSigner} KeyPairSigner */
+
+/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
+/** @typedef {import('@tetherto/wdk-wallet-solana').SignerOptions} SignerOptions */
+
+/** @typedef {import('@tetherto/wdk-wallet-solana/signers').ISignerSolana} ISignerSolana */
+
+/** @typedef {import('./wallet-account-read-only-multisig-squads.js').MultisigSquadsWalletConfig} MultisigSquadsWalletConfig */
+
 /**
  * `MultisigProposal` widened with `transaction` from `MultisigInteractionResult`, and with the
  * approvals a coordinator holds. `transaction` is undefined when an approval only circulates
@@ -78,7 +94,7 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
  *
  * @typedef {MultisigProposal & MultisigInteractionResult & { pendingConfirmations: number }} MultisigSquadsProposalResult
  */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigTransactionOptions} MultisigTransactionOptions */
+
 /**
  * `MultisigTransactionOptions` widened with the vault the proposal spends from and the note the
  * call records. `vaultIndex` is an index between 0 and 255, which the stored transaction carries
@@ -88,7 +104,7 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
  *
  * @typedef {MultisigTransactionOptions & { vaultIndex?: number, memo?: string }} MultisigSquadsTransactionOptions
  */
-/** @typedef {import('@tetherto/wdk-wallet/multisig').MultisigOptions} MultisigOptions */
+
 /**
  * `MultisigOptions` widened with the Squads permission mask to grant the member being added: a
  * bitwise OR of `PERMISSION.initiate`, `PERMISSION.vote` and `PERMISSION.execute`. Both fields
@@ -96,16 +112,6 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
  *
  * @typedef {Partial<MultisigOptions> & { mask?: number }} MultisigSquadsAddOwnerOptions
  */
-/** @typedef {import('@tetherto/wdk-wallet').TransactionResult} TransactionResult */
-/** @typedef {import('@tetherto/wdk-wallet').TransferOptions} TransferOptions */
-/** @typedef {import('@tetherto/wdk-wallet').KeyPair} KeyPair */
-/** @typedef {import('@solana/signers').KeyPairSigner} KeyPairSigner */
-
-/** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
-/** @typedef {import('@tetherto/wdk-wallet-solana/signers').ISignerSolana} ISignerSolana */
-/** @typedef {import('@tetherto/wdk-wallet-solana').SignerOptions} SignerOptions */
-
-/** @typedef {import('./wallet-account-read-only-multisig-squads.js').MultisigSquadsWalletConfig} MultisigSquadsWalletConfig */
 
 /**
  * The Squads member permissions, as the bits of a member's mask.
