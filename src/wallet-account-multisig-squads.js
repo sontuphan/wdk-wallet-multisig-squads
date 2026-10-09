@@ -103,13 +103,9 @@ import { getProgramDerivedAddressSync } from './helpers/program-derived-address.
 
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana/signers').ISignerSolana} ISignerSolana */
+/** @typedef {import('@tetherto/wdk-wallet-solana').SignerOptions} SignerOptions */
 
 /** @typedef {import('./wallet-account-read-only-multisig-squads.js').MultisigSquadsWalletConfig} MultisigSquadsWalletConfig */
-
-/**
- * @typedef {Object} SignerOptions
- * @property {boolean} [shouldWipeSignerOnDisposal] - If true, wipes the signer given at construction on calls to the 'dispose' method.
- */
 
 /**
  * The Squads member permissions, as the bits of a member's mask.

@@ -37,11 +37,8 @@
 /** @typedef {import('@solana/signers').KeyPairSigner} KeyPairSigner */
 /** @typedef {import('@tetherto/wdk-wallet-solana').SolanaTransaction} SolanaTransaction */
 /** @typedef {import('@tetherto/wdk-wallet-solana/signers').ISignerSolana} ISignerSolana */
+/** @typedef {import('@tetherto/wdk-wallet-solana').SignerOptions} SignerOptions */
 /** @typedef {import('./wallet-account-read-only-multisig-squads.js').MultisigSquadsWalletConfig} MultisigSquadsWalletConfig */
-/**
- * @typedef {Object} SignerOptions
- * @property {boolean} [shouldWipeSignerOnDisposal] - If true, wipes the signer given at construction on calls to the 'dispose' method.
- */
 /**
  * The Squads member permissions, as the bits of a member's mask.
  *
@@ -357,12 +354,7 @@ export type KeyPair = import("@tetherto/wdk-wallet").KeyPair;
 export type KeyPairSigner = import("@solana/signers").KeyPairSigner;
 export type SolanaTransaction = import("@tetherto/wdk-wallet-solana").SolanaTransaction;
 export type ISignerSolana = import("@tetherto/wdk-wallet-solana/signers").ISignerSolana;
+export type SignerOptions = import("@tetherto/wdk-wallet-solana").SignerOptions;
 export type MultisigSquadsWalletConfig = import("./wallet-account-read-only-multisig-squads.js").MultisigSquadsWalletConfig;
-export type SignerOptions = {
-    /**
-     * - If true, wipes the signer given at construction on calls to the 'dispose' method.
-     */
-    shouldWipeSignerOnDisposal?: boolean;
-};
 import WalletAccountReadOnlyMultisigSquads from './wallet-account-read-only-multisig-squads.js';
 import { WalletAccountSolana } from '@tetherto/wdk-wallet-solana';
